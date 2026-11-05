@@ -1,0 +1,410 @@
+--[[
+  LUCKY BLOCK ADMIN PANEL  (สำหรับแมพของคุณเองใน Roblox Studio)
+  ฟังก์ชัน: อมตะ / เสกลัคกี้บล็อคทุกแบบ / ปรับระยะตี 1-100 / บิน
+  โบนัส: ความเร็ว, กระโดดไม่จำกัด, ทะลุกำแพง, เก็บบล็อคอัตโนมัติ, กันตกแมพ
+
+  วิธีติดตั้ง (3 ขั้นตอน):
+  1) สร้างโฟลเดอร์ชื่อ "LuckyBlocks" ใน ServerStorage แล้วใส่ลัคกี้บล็อคทุกแบบของคุณลงไป
+     (เป็น Part หรือ Model ก็ได้)
+  2) สร้าง "Script" ใน ServerScriptService แล้ววางโค้ดส่วน [SERVER] ด้านล่าง
+  3) สร้าง "LocalScript" ใน StarterPlayer > StarterPlayerScripts แล้ววางโค้ดส่วน [CLIENT]
+
+  ใส่ UserId ของคุณใน ADMINS (ใน Studio ทุกคนใช้ได้อัตโนมัติ)
+]]
+
+--==================================================================
+-- [SERVER]  →  Script ใน ServerScriptService
+--==================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local RunService = game:GetService("RunService")
+
+local ADMINS = { 123456789 } -- ใส่ UserId ของคุณ
+local BLOCK_FOLDER = "LuckyBlocks"
+
+local remote = Instance.new("RemoteEvent")
+remote.Name = "LuckyAdminEvent"
+remote.Parent = ReplicatedStorage
+
+local state = {} -- state[player] = {god=bool, reach=number, speed=number}
+
+local function isAdmin(plr)
+	if RunService:IsStudio() then return true end
+	return table.find(ADMINS, plr.UserId) ~= nil
+end
+
+local function getState(plr)
+	state[plr] = state[plr] or { god = false, reach = 0, speed = 16, autoCollect = false }
+	return state[plr]
+end
+
+-- ===== อมตะ =====
+local function applyGod(plr)
+	local s = getState(plr)
+	local char = plr.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+
+	local ff = char:FindFirstChild("AdminFF")
+	if s.god then
+		hum.MaxHealth = math.huge
+		hum.Health = math.huge
+		if not ff then
+			ff = Instance.new("ForceField")
+			ff.Name = "AdminFF"
+			ff.Visible = false
+			ff.Parent = char
+		end
+		if not hum:GetAttribute("GodHooked") then
+			hum:SetAttribute("GodHooked", true)
+			hum.HealthChanged:Connect(function()
+				if getState(plr).god and hum.Health < hum.MaxHealth then
+					hum.Health = hum.MaxHealth
+				end
+			end)
+		end
+	else
+		if ff then ff:Destroy() end
+		hum.MaxHealth = 100
+		hum.Health = 100
+	end
+end
+
+-- ===== ระยะตี (ขยาย Handle ของอาวุธ) =====
+local function applyReachToTool(tool, reach)
+	local handle = tool:FindFirstChild("Handle")
+	if not (handle and handle:IsA("BasePart")) then return end
+	if not handle:GetAttribute("OrigSize") then
+		handle:SetAttribute("OrigSize", handle.Size)
+	end
+	local orig = handle:GetAttribute("OrigSize")
+	if reach <= 0 then
+		handle.Size = orig
+		handle.Transparency = handle:GetAttribute("OrigTrans") or handle.Transparency
+		return
+	end
+	if not handle:GetAttribute("OrigTrans") then
+		handle:SetAttribute("OrigTrans", handle.Transparency)
+	end
+	-- ขยายตามแกน Z (ยาวไปข้างหน้า) 1-100 เท่าของความยาวเดิม
+	handle.Size = Vector3.new(orig.X, orig.Y, math.max(orig.Z, reach))
+	handle.Massless = true
+	handle.CanCollide = false
+end
+
+local function applyReach(plr)
+	local reach = getState(plr).reach
+	for _, container in ipairs({ plr.Character, plr:FindFirstChildOfClass("Backpack") }) do
+		if container then
+			for _, t in ipairs(container:GetChildren()) do
+				if t:IsA("Tool") then applyReachToTool(t, reach) end
+			end
+		end
+	end
+end
+
+-- ===== เสกลัคกี้บล็อคทุกแบบ =====
+local function spawnAll(plr)
+	local folder = ServerStorage:FindFirstChild(BLOCK_FOLDER)
+	local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+	if not (folder and hrp) then return end
+
+	local items = folder:GetChildren()
+	local cols = math.ceil(math.sqrt(#items))
+	local spacing = 6
+	local origin = hrp.CFrame * CFrame.new(0, 0, -12)
+
+	for i, template in ipairs(items) do
+		local clone = template:Clone()
+		local x = ((i - 1) % cols - cols / 2) * spacing
+		local z = -math.floor((i - 1) / cols) * spacing
+		local cf = origin * CFrame.new(x, 2, z)
+		if clone:IsA("Model") then
+			clone:PivotTo(cf)
+		elseif clone:IsA("BasePart") then
+			clone.CFrame = cf
+			clone.Anchored = true
+		end
+		clone.Parent = workspace
+	end
+end
+
+-- ===== เก็บบล็อคอัตโนมัติ (ดึงลัคกี้บล็อคที่มี ClickDetector/Touch) =====
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		for plr, s in pairs(state) do
+			if s.autoCollect and plr.Character then
+				local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+				if hrp then
+					for _, obj in ipairs(workspace:GetDescendants()) do
+						if obj:IsA("BasePart") and obj.Name:lower():find("lucky") and obj.Parent ~= nil then
+							if (obj.Position - hrp.Position).Magnitude < 60 and firetouchinterest == nil then
+								-- ใช้ได้เฉพาะในเกมของคุณ: วาร์ปบล็อคมาที่ผู้เล่นเพื่อให้ Touched ทำงานตามปกติ
+								obj.CFrame = hrp.CFrame * CFrame.new(0, 0, -3)
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end)
+
+-- ===== รับคำสั่งจาก Client =====
+remote.OnServerEvent:Connect(function(plr, action, value)
+	if not isAdmin(plr) then return end
+	local s = getState(plr)
+
+	if action == "God" then
+		s.god = value == true
+		applyGod(plr)
+	elseif action == "Reach" then
+		s.reach = math.clamp(tonumber(value) or 0, 0, 100)
+		applyReach(plr)
+	elseif action == "Speed" then
+		s.speed = math.clamp(tonumber(value) or 16, 8, 200)
+		local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.WalkSpeed = s.speed end
+	elseif action == "SpawnAll" then
+		spawnAll(plr)
+	elseif action == "AutoCollect" then
+		s.autoCollect = value == true
+	end
+end)
+
+local function onChar(plr, char)
+	local s = getState(plr)
+	local hum = char:WaitForChild("Humanoid")
+	hum.WalkSpeed = s.speed
+	task.wait(0.2)
+	applyGod(plr)
+	applyReach(plr)
+	local bp = plr:WaitForChild("Backpack")
+	bp.ChildAdded:Connect(function(c)
+		if c:IsA("Tool") then applyReachToTool(c, getState(plr).reach) end
+	end)
+	char.ChildAdded:Connect(function(c)
+		if c:IsA("Tool") then applyReachToTool(c, getState(plr).reach) end
+	end)
+end
+
+Players.PlayerAdded:Connect(function(plr)
+	plr.CharacterAdded:Connect(function(c) onChar(plr, c) end)
+end)
+for _, plr in ipairs(Players:GetPlayers()) do
+	plr.CharacterAdded:Connect(function(c) onChar(plr, c) end)
+	if plr.Character then task.spawn(onChar, plr, plr.Character) end
+end
+Players.PlayerRemoving:Connect(function(plr) state[plr] = nil end)
+
+
+--==================================================================
+-- [CLIENT]  →  LocalScript ใน StarterPlayerScripts
+--==================================================================
+--[[  คัดลอกส่วนนี้ไปวางใน LocalScript แยกต่างหาก (ลบเครื่องหมาย --[[ และ ]] ออก)
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local remote = ReplicatedStorage:WaitForChild("LuckyAdminEvent")
+local cam = workspace.CurrentCamera
+
+local flying, flySpeed, infJump, noclip = false, 60, false, false
+local upHeld, downHeld = false, false
+local bv, bg
+
+local function char() return player.Character or player.CharacterAdded:Wait() end
+local function hum() return char():WaitForChild("Humanoid") end
+local function hrp() return char():WaitForChild("HumanoidRootPart") end
+
+-- ===== บิน =====
+local function setFly(on)
+	flying = on
+	local root = hrp()
+	if on then
+		bv = Instance.new("BodyVelocity")
+		bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+		bv.Velocity = Vector3.zero
+		bv.Parent = root
+		bg = Instance.new("BodyGyro")
+		bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+		bg.P = 9e4
+		bg.Parent = root
+		hum().PlatformStand = true
+	else
+		if bv then bv:Destroy() end
+		if bg then bg:Destroy() end
+		hum().PlatformStand = false
+	end
+end
+
+RS.RenderStepped:Connect(function()
+	if flying and bv and bg then
+		local dir = hum().MoveDirection
+		local look = cam.CFrame
+		local move = Vector3.zero
+		if dir.Magnitude > 0 then
+			-- ไปตามทิศกล้อง (มองขึ้น = บินขึ้น)
+			local fwd = look.LookVector:Dot(dir) -- >0 เดินหน้า
+			move = (fwd >= 0 and look.LookVector or -look.LookVector) * dir.Magnitude
+			move = Vector3.new(dir.X, 0, dir.Z).Unit * dir.Magnitude
+			move = move + Vector3.new(0, look.LookVector.Y * math.sign(fwd) * dir.Magnitude, 0)
+		end
+		if upHeld or UIS:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
+		if downHeld or UIS:IsKeyDown(Enum.KeyCode.LeftShift) then move -= Vector3.new(0, 1, 0) end
+		bv.Velocity = move * flySpeed
+		bg.CFrame = CFrame.new(hrp().Position, hrp().Position + Vector3.new(look.LookVector.X, 0, look.LookVector.Z))
+	end
+	if noclip then
+		for _, p in ipairs(char():GetDescendants()) do
+			if p:IsA("BasePart") then p.CanCollide = false end
+		end
+	end
+end)
+
+UIS.JumpRequest:Connect(function()
+	if infJump and not flying then hum():ChangeState(Enum.HumanoidStateType.Jumping) end
+end)
+
+-- กันตกแมพ
+RS.Heartbeat:Connect(function()
+	local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if r and r.Position.Y < -200 then r.CFrame = CFrame.new(0, 50, 0) end
+end)
+
+player.CharacterAdded:Connect(function()
+	flying = false
+end)
+
+-- ===== GUI =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "LuckyAdmin"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(230, 360)
+frame.Position = UDim2.new(0, 10, 0.5, -180)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+frame.Active = true
+frame.Draggable = true
+frame.Parent = gui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+
+local layout = Instance.new("UIListLayout", frame)
+layout.Padding = UDim.new(0, 5)
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+Instance.new("UIPadding", frame).PaddingTop = UDim.new(0, 6)
+
+local function label(text)
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.new(1, -12, 0, 22)
+	l.BackgroundTransparency = 1
+	l.Text = text
+	l.TextColor3 = Color3.new(1, 1, 1)
+	l.Font = Enum.Font.GothamBold
+	l.TextSize = 14
+	l.Parent = frame
+	return l
+end
+
+local function button(text, callback)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, -12, 0, 30)
+	b.BackgroundColor3 = Color3.fromRGB(60, 60, 90)
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.Font = Enum.Font.Gotham
+	b.TextSize = 14
+	b.Text = text
+	b.Parent = frame
+	Instance.new("UICorner", b)
+	local on = false
+	b.MouseButton1Click:Connect(function()
+		on = not on
+		b.BackgroundColor3 = on and Color3.fromRGB(40, 150, 80) or Color3.fromRGB(60, 60, 90)
+		callback(on, b)
+	end)
+	return b
+end
+
+local function input(placeholder, default, callback)
+	local t = Instance.new("TextBox")
+	t.Size = UDim2.new(1, -12, 0, 28)
+	t.BackgroundColor3 = Color3.fromRGB(45, 45, 65)
+	t.TextColor3 = Color3.new(1, 1, 1)
+	t.PlaceholderText = placeholder
+	t.Text = tostring(default)
+	t.Font = Enum.Font.Gotham
+	t.TextSize = 14
+	t.ClearTextOnFocus = false
+	t.Parent = frame
+	Instance.new("UICorner", t)
+	t.FocusLost:Connect(function() callback(tonumber(t.Text), t) end)
+	return t
+end
+
+label("🍀 Lucky Block Admin")
+
+button("🛡️ อมตะ", function(on) remote:FireServer("God", on) end)
+button("✈️ บิน", function(on) setFly(on) end)
+input("ความเร็วบิน", flySpeed, function(n) if n then flySpeed = math.clamp(n, 10, 300) end end)
+
+label("⚔️ ระยะตี (1-100)")
+input("1-100", 10, function(n, box)
+	if not n then return end
+	n = math.clamp(math.floor(n), 1, 100)
+	box.Text = tostring(n)
+	remote:FireServer("Reach", n)
+end)
+
+local spawnBtn = Instance.new("TextButton")
+spawnBtn.Size = UDim2.new(1, -12, 0, 30)
+spawnBtn.BackgroundColor3 = Color3.fromRGB(200, 150, 20)
+spawnBtn.TextColor3 = Color3.new(1, 1, 1)
+spawnBtn.Font = Enum.Font.GothamBold
+spawnBtn.TextSize = 14
+spawnBtn.Text = "🎁 เสกลัคกี้บล็อคทุกแบบ"
+spawnBtn.Parent = frame
+Instance.new("UICorner", spawnBtn)
+spawnBtn.MouseButton1Click:Connect(function() remote:FireServer("SpawnAll") end)
+
+button("🧲 ดึงบล็อคมาหาอัตโนมัติ", function(on) remote:FireServer("AutoCollect", on) end)
+button("🦘 กระโดดไม่จำกัด", function(on) infJump = on end)
+button("👻 ทะลุกำแพง", function(on) noclip = on end)
+label("⚡ ความเร็ววิ่ง")
+input("8-200", 16, function(n) if n then remote:FireServer("Speed", n) end end)
+
+-- ปุ่มขึ้น/ลง สำหรับมือถือ
+local function holdBtn(text, pos, setter)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(60, 60)
+	b.Position = pos
+	b.Text = text
+	b.TextSize = 24
+	b.BackgroundColor3 = Color3.fromRGB(60, 60, 90)
+	b.BackgroundTransparency = 0.3
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.Parent = gui
+	Instance.new("UICorner", b).CornerRadius = UDim.new(1, 0)
+	b.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then setter(true) end
+	end)
+	b.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then setter(false) end
+	end)
+end
+holdBtn("⬆", UDim2.new(1, -80, 1, -200), function(v) upHeld = v end)
+holdBtn("⬇", UDim2.new(1, -80, 1, -130), function(v) downHeld = v end)
+
+-- กด RightShift เพื่อซ่อน/แสดงเมนู
+UIS.InputBegan:Connect(function(i, gp)
+	if not gp and i.KeyCode == Enum.KeyCode.RightShift then frame.Visible = not frame.Visible end
+end)
+
+]]
